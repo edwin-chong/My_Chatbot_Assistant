@@ -1,0 +1,7 @@
+.qodo
+*.properties
+*.env
+/venv
+/.env
+/__pycache__
+activateEnv.txt
