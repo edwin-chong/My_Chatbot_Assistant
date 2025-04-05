@@ -1,83 +1,77 @@
 import os
 from dotenv import load_dotenv
-
 from langchain_huggingface import HuggingFaceEndpoint
-from langchain_core.prompts import PromptTemplate  # Updated import
+from langchain_core.prompts import PromptTemplate
 from langchain.schema.runnable import RunnablePassthrough
 from langchain.schema.output_parser import StrOutputParser
-from pineconeIndexing import initialize_pinecone, clear_pinecone_index
+from pineconeIndexing import (
+    initialize_pinecone,
+    connect_to_index,
+    list_pinecone_indexes,
+    clear_pinecone_index,
+    sanitize_index_name
+)
 from huggingface_hub import InferenceClient
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 class ChatBot:
-    def __init__(self):
+    def __init__(self, file_path=None, file_name=None):
         # Load environment variables
         load_dotenv()
-        self._main_menu()
+        if file_path and file_name:
+            self._initialize_pinecone_and_connect_index(file_path, file_name)
+            self._setup_huggingface_client()
+            self._define_prompt_and_chain()
 
-    def _main_menu(self):
-        """Loop the main menu until the user chooses to exit."""
-        while True:
-            user_choice = input("What do you want to do?\n  1. Process a text file\n  2. Remove Pinecone index\nType 'exit' to quit\n")
-            if user_choice == '1':
-                self._process_text_file()
-            elif user_choice == '2':
-                self._clear_index()
-            elif user_choice == 'exit':
-                print("Exiting program.")
-                quit()
-            else:
-                print("Invalid choice. Please try again.")
-
-    def _process_text_file(self):
-        """Handle processing of a text file."""
-        file_name = input("Please enter the file path: ")
-        file_path = "./data/" + file_name
-        self._initialize_pinecone(file_path, file_name)
+    def process_file(self, file_path, file_name):
+        """Process a file and initialize the chatbot."""
+        self._initialize_pinecone_and_connect_index(file_path, file_name)
         self._setup_huggingface_client()
         self._define_prompt_and_chain()
-        self._question_loop()
 
-    def _clear_index(self):
+    def clear_index(self, index_name):
         """Clear the Pinecone index."""
-        clear_pinecone_index()
-        print("Cleared Pinecone index.")
+        clear_pinecone_index(index_name)
 
-    def _question_loop(self):
-        """Loop to handle user questions."""
-        while True:
-            user_question = input("Ask me anything (Enter 'exit' or 'quit' to go back to main menu): ")
-            if user_question.lower() in ['exit', 'quit']:
-                break
-            result = self.rag_chain.invoke(user_question)
-            print(result)
+    def ask_question(self, question):
+        """Ask a question to the chatbot."""
+        if not hasattr(self, 'rag_chain') or self.rag_chain is None:
+            raise ValueError("Chatbot is not initialized. Please process a file first.")
+        return self.rag_chain.invoke(question)
 
-    def _initialize_pinecone(self, file_path, file_name):
+    def _initialize_pinecone_and_connect_index(self, file_path, file_name):
         """Initialize the Pinecone index."""
         try:
-            self.docsearch = initialize_pinecone(file_path, "sentence-transformers/all-MiniLM-L12-v2", file_name)
+            file_name = sanitize_index_name(file_name)
+            initialize_pinecone()
+            self.docsearch = connect_to_index(file_path, "sentence-transformers/all-MiniLM-L12-v2", file_name)
+            logging.info(f"Index '{file_name}' initialized successfully.")
         except FileNotFoundError as e:
-            print(e)
-            self.docsearch = None
-
-        if self.docsearch is None:
-            print("Failed to initialize Pinecone index. Exiting.")
-            quit()
+            logging.error(f"File not found: {e}")
+            raise
+        except Exception as e:
+            logging.error(f"Error initializing Pinecone index: {e}")
+            raise
 
     def _setup_huggingface_client(self):
         """Set up the HuggingFace Inference Client."""
+        api_key = os.getenv('HUGGINGFACE_API_KEY')
+        if not api_key:
+            raise ValueError("HUGGINGFACE_API_KEY environment variable is not set.")
         self.client = InferenceClient(
             model="mistralai/Mixtral-8x7B-Instruct-v0.1",
-            token=os.getenv('HUGGINGFACE_API_KEY')  # Ensure API key is loaded
+            token=api_key
         )
 
     def _define_prompt_and_chain(self):
         """Define the prompt template and RAG chain."""
         self.prompt = PromptTemplate(
             template="""
-            You are a fortune teller. These Human will ask you a questions about their life. 
-            Use following piece of context to answer the question. 
-            If you don't know the answer, just say you don't know. 
-            Keep the answer within 2 sentences and concise.
+            You are a problem solver. Use the provided context to address the question or solve the problem. 
+            If the context does not contain enough information, respond with "I don't know." 
+            Keep your response clear and concise.
 
             Context: {context}
             Question: {question}
@@ -94,7 +88,3 @@ class ChatBot:
             | (lambda output: output.choices[0].message["content"]) 
             | StrOutputParser()
         )
-        
-    def ask_question(self, question):
-        """Ask a question to the chatbot."""
-        return self.rag_chain.invoke({"question": question})

@@ -3,12 +3,36 @@ from pinecone import Pinecone, ServerlessSpec
 from langchain_pinecone import PineconeVectorStore
 from langchain.schema import Document
 from langchain_text_splitters import CharacterTextSplitter
-# from langchain.text_splitter import CharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings 
 from PyPDF2 import PdfReader
 import csv
 import re
 import json
+import logging
+
+logging.basicConfig(level=logging.INFO)
+pc = None
+
+def initialize_pinecone():
+    global pc
+    if not pc:
+        api_key = os.getenv('PINECONE_API_KEY')
+        if not api_key:
+            raise ValueError("PINECONE_API_KEY environment variable is not set.")
+        pc = Pinecone(api_key=api_key)
+        print("Pinecone initialized successfully.")
+    else:
+        print("Pinecone is already initialized.")
+
+def connect_to_index(file_path, model_name, index_name):
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"The file at path '{file_path}' does not exist. Please provide a valid file path.")
+    
+    indexes = list_pinecone_indexes()
+    if index_name in indexes:
+        return _connect_to_existing_index(index_name, model_name)
+
+    return _create_new_index(file_path, model_name, index_name)
 
 def sanitize_index_name(name):
     # Remove file extension if present
@@ -64,29 +88,13 @@ def generate_embeddings(file_content, model_name="sentence-transformers/all-Mini
 
     return docs, embeddings
 
-# Function to initialize or connect to a Pinecone index
-def initialize_pinecone(file_path, model_name, index_name):
-    """Initialize or connect to a Pinecone index."""
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"The file at path '{file_path}' does not exist. Please provide a valid file path.")
-
-    api_key = _get_pinecone_api_key()
-    pc = Pinecone(api_key=api_key)
-    indexes = _get_pinecone_indexes(pc)
-
-    index_name = sanitize_index_name(index_name)
-    if index_name in indexes:
-        return _connect_to_existing_index(index_name, model_name)
-
-    return _create_new_index(pc, file_path, model_name, index_name)
-
 def _connect_to_existing_index(index_name, model_name):
     """Connect to an existing Pinecone index."""
     print(f"Index '{index_name}' already exists. Connecting to the existing index.")
     embeddings = HuggingFaceEmbeddings(model_name=model_name)
     return PineconeVectorStore.from_existing_index(index_name, embeddings)
 
-def _create_new_index(pc, file_path, model_name, index_name):
+def _create_new_index(file_path, model_name, index_name):
     """Create a new Pinecone index."""
     print(f"Index '{index_name}' does not exist. Creating a new index: " + index_name)
     try:
@@ -95,9 +103,13 @@ def _create_new_index(pc, file_path, model_name, index_name):
         print(e)
         return None
 
+    # Dynamically determine the dimension
+    embeddings = HuggingFaceEmbeddings(model_name=model_name)
+    dimension = embeddings.embedding_dimension
+
     pc.create_index(
         name=index_name,
-        dimension=384,
+        dimension=dimension,
         metric="cosine",
         spec=ServerlessSpec(
             cloud="aws",
@@ -108,34 +120,23 @@ def _create_new_index(pc, file_path, model_name, index_name):
     print(f"Index '{index_name}' created successfully.")
     return PineconeVectorStore.from_documents(docs, embeddings, index_name=index_name)
 
-def clear_pinecone_index():
-    """
-    Clears all data from the specified Pinecone index.
-    """
-    api_key = _get_pinecone_api_key()
-    pc = Pinecone(api_key=api_key)
-    indexes = _get_pinecone_indexes(pc)
-    index_name = input("Clear Pinecone index? Enter index name: ").strip()
-    _validate_and_clear_index(pc, indexes, index_name)
+def clear_pinecone_index(index_name):
+    _validate_and_clear_index(index_name)
 
-def _get_pinecone_api_key():
-    """Retrieve the Pinecone API key from environment variables."""
-    api_key = os.getenv('PINECONE_API_KEY')
-    if not api_key:
-        raise ValueError("PINECONE_API_KEY environment variable is not set.")
-    return api_key
-
-def _get_pinecone_indexes(pc):
+def list_pinecone_indexes():
     """Retrieve the list of available Pinecone indexes."""
     indexes = [index["name"] for index in pc.list_indexes()]
     print("Getting list of indexes: " + str(indexes))
     return indexes
 
-def _validate_and_clear_index(pc, indexes, index_name):
+def _validate_and_clear_index(index_name):
     """Validate the index name and clear the specified Pinecone index."""
+    indexes = list_pinecone_indexes()
     matching_index = next((index for index in indexes if index == index_name), None)
     if not matching_index:
         raise ValueError(f"Index '{index_name}' does not exist. Available indexes: {indexes}")
     print(f"Clearing all data from index '{index_name}'...")
     pc.delete_index(index_name)
     print(f"Index '{index_name}' has been cleared successfully.")
+
+
