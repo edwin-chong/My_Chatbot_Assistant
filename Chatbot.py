@@ -30,8 +30,9 @@ class ChatBot:
 
     def _process_text_file(self):
         """Handle processing of a text file."""
-        file_path = "./data/" + input("Please enter the file path: ")
-        self._initialize_pinecone(file_path)
+        file_name = input("Please enter the file path: ")
+        file_path = "./data/" + file_name
+        self._initialize_pinecone(file_path, file_name)
         self._setup_huggingface_client()
         self._define_prompt_and_chain()
         self._question_loop()
@@ -50,10 +51,10 @@ class ChatBot:
             result = self.rag_chain.invoke(user_question)
             print(result)
 
-    def _initialize_pinecone(self, file_path):
+    def _initialize_pinecone(self, file_path, file_name):
         """Initialize the Pinecone index."""
         try:
-            self.docsearch = initialize_pinecone(file_path, "sentence-transformers/all-MiniLM-L12-v2", file_path)
+            self.docsearch = initialize_pinecone(file_path, "sentence-transformers/all-MiniLM-L12-v2", file_name)
         except FileNotFoundError as e:
             print(e)
             self.docsearch = None
